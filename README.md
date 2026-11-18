@@ -4,11 +4,11 @@
 
 ![PrimeOps Replay: one trade replayed at 09:50 (break open) and 09:53 (matched)](docs/overview.png)
 
-PrimeOps Replay checks whether a client's trade allocations add up to the quantity the broker executed, and shows what an analyst could have seen at any point in the day.
+My intention with PrimeOps Replay was to understand one piece of middle-office work properly: checking that a client's trade allocations add up to the quantity the broker executed, and seeing what an analyst could have seen at any point in the day.
 
-When a broker fills a block order, the client sends instructions splitting the shares across its accounts. Those instructions get corrected, resent and sometimes arrive out of order. If the split doesn't match the fill, there's a break to chase before settlement. I built this to work through the rules for deciding which instruction is in force at a given moment, and to be able to answer "what did we know at 09:50?" rather than only "what's true now?".
+When a broker fills a block order, the client sends instructions splitting the shares across its accounts (for example, the different funds a manager runs). Those instructions get corrected, resent and sometimes arrive out of order. If the split doesn't match the fill, there's a break to chase before settlement. I wanted to work through the rules for deciding which instruction is in force at a given moment, and to be able to answer "what did we know at 09:50?" rather than only "what's true now?".
 
-It is a reconciler, not a prime brokerage system. All data in the repo is synthetic.
+It is a reconciler, not a prime brokerage system. All data in the repo is synthetic (made up for testing, with no real clients or trades).
 
 ## Example
 
@@ -21,7 +21,7 @@ The broker buys 10,000 Tencent (0700.HK) shares for a client:
 | 09:52 | Allocation rev 2: ACC-A 6,000, ACC-B 4,000 | `MATCHED` |
 | 09:53 | Rev 2 again (duplicate) | still `MATCHED` |
 
-Asked as of 09:50, it still shows the 500-share break, because revision 2 hadn't arrived yet.
+Asked as of 09:50, it still shows the 500-share break, because revision 2 hadn't arrived yet (it came in two minutes later).
 
 ## Running it
 
