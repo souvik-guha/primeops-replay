@@ -4,6 +4,8 @@
 
 ![PrimeOps Replay: one trade replayed at 09:50 (break open) and 09:53 (matched)](docs/overview.png)
 
+**Project page:** [souvik-guha.github.io/primeops-replay](https://souvik-guha.github.io/primeops-replay/)
+
 My intention with PrimeOps Replay was to understand one piece of middle-office work properly: checking that a client's trade allocations add up to the quantity the broker executed, and seeing what an analyst could have seen at any point in the day.
 
 When a broker fills a block order, the client sends instructions splitting the shares across its accounts (for example, the different funds a manager runs). Those instructions get corrected, resent and sometimes arrive out of order. If the split doesn't match the fill, there's a break to chase before settlement. I wanted to work through the rules for deciding which instruction is in force at a given moment, and to be able to answer "what did we know at 09:50?" rather than only "what's true now?".

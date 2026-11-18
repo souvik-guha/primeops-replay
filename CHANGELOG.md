@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.1 (2026-11-19)
+
+### Added
+- Project page at https://souvik-guha.github.io/primeops-replay/ (served from `docs/`)
+
+### Changed
+- README intro rewritten
+- pytest pinned to 9.0.3; 8.3.3 is affected by PYSEC-2026-1845
+- Compound test assertions split so a failure names the exact check
+
 ## 1.1.0 (2026-11-19)
 
 ### Added
