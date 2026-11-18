@@ -22,7 +22,8 @@ def test_readme_commands(capsys, engine):
     assert "BREAK_SHORT" in capsys.readouterr().out
     assert run("show", "--trade-id", "T1001", "--as-of", "2026-11-18T09:53:00+08:00", "--engine", engine) == 0
     out = capsys.readouterr().out
-    assert "MATCHED" in out and "duplicate message, ignored" in out
+    assert "MATCHED" in out
+    assert "duplicate message, ignored" in out
 
 
 def test_time_without_offset_means_hong_kong(capsys):

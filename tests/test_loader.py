@@ -67,21 +67,26 @@ def test_a_bad_message_is_rejected_and_the_rest_still_load(tmp_path):
     bad = dict(GOOD, message_id="M2", revision=2, allocations=[{"account": "A", "quantity": -1}])
     events, rejected = load_messages(tmp_path, GOOD, bad, "{not json")
     assert [e.message_id for e in events] == ["M1"]
-    assert rejected[0].trade_id == "T1" and rejected[0].note.startswith("message M2: rejected")
-    assert rejected[1].trade_id is None and "not valid JSON" in rejected[1].note
+    assert rejected[0].trade_id == "T1"
+    assert rejected[0].note.startswith("message M2: rejected")
+    assert rejected[1].trade_id is None
+    assert "not valid JSON" in rejected[1].note
 
 
 def test_account_with_formula_characters_is_rejected(tmp_path):
     events, rejected = load_messages(tmp_path, dict(GOOD, allocations=[{"account": "=1+1", "quantity": 100}]))
-    assert events == [] and "account must be" in rejected[0].note
+    assert events == []
+    assert "account must be" in rejected[0].note
 
 
 def test_account_listed_twice_in_one_split(tmp_path):
     split = [{"account": "A", "quantity": 100}, {"account": "A", "quantity": 50}]
     events, rejected = load_messages(tmp_path, dict(GOOD, allocations=split))
-    assert events == [] and "appears twice" in rejected[0].note
+    assert events == []
+    assert "appears twice" in rejected[0].note
 
 
 def test_quantity_too_large_for_sqlite_is_rejected(tmp_path):
     events, rejected = load_messages(tmp_path, dict(GOOD, allocations=[{"account": "A", "quantity": 2**70}]))
-    assert events == [] and "between 1 and" in rejected[0].note
+    assert events == []
+    assert "between 1 and" in rejected[0].note
