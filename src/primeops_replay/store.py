@@ -1,86 +1,24 @@
 """The same as-of rules as engine.py, written as SQL on SQLite.
 
-Timestamps are stored as fixed-width UTC text, so comparing text compares time.
-Duplicate messages are stored as they arrived and filtered by the query.
+The schema and the as-of query live in sql/. Duplicate messages are stored
+as they arrived and filtered by the query.
 """
 
 from __future__ import annotations
 
 import sqlite3
 from datetime import datetime, timezone
+from importlib.resources import files
 
 from .models import AllocationEvent, Execution, ReconResult, status_for
 
-SCHEMA = """
-CREATE TABLE executions (
-    trade_id          TEXT PRIMARY KEY,
-    symbol            TEXT NOT NULL,
-    side              TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
-    executed_quantity INTEGER NOT NULL CHECK (executed_quantity > 0),
-    received_at       TEXT NOT NULL
-);
 
-CREATE TABLE allocation_messages (
-    arrival_seq INTEGER PRIMARY KEY,  -- arrival order: received_at, then file line
-    message_id  TEXT NOT NULL,        -- not unique: duplicates are kept
-    trade_id    TEXT NOT NULL,
-    revision    INTEGER NOT NULL CHECK (revision > 0),
-    received_at TEXT NOT NULL
-);
+def _sql(name: str) -> str:
+    return files("primeops_replay").joinpath("sql").joinpath(name).read_text(encoding="utf-8")
 
-CREATE TABLE allocation_lines (
-    arrival_seq INTEGER NOT NULL REFERENCES allocation_messages (arrival_seq),
-    line_no     INTEGER NOT NULL,
-    account     TEXT NOT NULL,
-    quantity    INTEGER NOT NULL CHECK (quantity > 0),
-    PRIMARY KEY (arrival_seq, line_no)
-);
-"""
 
-AS_OF_QUERY = """
-WITH visible AS (
-    SELECT * FROM allocation_messages WHERE received_at <= :as_of
-),
-first_copies AS (
-    SELECT *, ROW_NUMBER() OVER (
-        PARTITION BY trade_id, message_id ORDER BY arrival_seq
-    ) AS copy_no
-    FROM visible
-),
-in_force AS (
-    -- highest revision wins; an equal revision that arrives later does not
-    SELECT *, ROW_NUMBER() OVER (
-        PARTITION BY trade_id ORDER BY revision DESC, arrival_seq
-    ) AS rank_no
-    FROM first_copies
-    WHERE copy_no = 1
-),
-allocated AS (
-    SELECT m.trade_id, m.arrival_seq, m.message_id, m.revision, m.received_at,
-           SUM(l.quantity) AS allocated_quantity
-    FROM in_force m
-    JOIN allocation_lines l ON l.arrival_seq = m.arrival_seq
-    WHERE m.rank_no = 1
-    GROUP BY m.trade_id, m.arrival_seq, m.message_id, m.revision, m.received_at
-),
-trades AS (
-    SELECT trade_id FROM executions
-    UNION
-    SELECT trade_id FROM allocation_messages
-)
-SELECT t.trade_id,
-       CASE WHEN e.received_at <= :as_of THEN e.executed_quantity END,
-       a.allocated_quantity,
-       a.revision,
-       a.message_id,
-       a.arrival_seq,
-       a.received_at
-FROM trades t
-LEFT JOIN executions e ON e.trade_id = t.trade_id
-LEFT JOIN allocated a ON a.trade_id = t.trade_id
-WHERE :trade_id IS NULL OR t.trade_id = :trade_id
-ORDER BY t.trade_id
-"""
+SCHEMA = _sql("schema.sql")
+AS_OF_QUERY = _sql("as_of.sql")
 
 SPLIT_QUERY = "SELECT account, quantity FROM allocation_lines WHERE arrival_seq = ? ORDER BY line_no"
 

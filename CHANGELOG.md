@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.0 (2026-11-19)
+
+### Changed
+- The SQLite schema and the as-of query moved out of Python strings into `sql/schema.sql` and `sql/as_of.sql`, so the query can be read and run on its own
+- Output is unchanged; the SQL-versus-Python tests pass as before
+
 ## 1.1.1 (2026-11-19)
 
 ### Added

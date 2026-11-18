@@ -101,7 +101,7 @@ Statuses: `AWAITING_ALLOCATION`, `BREAK_SHORT` (under-allocated), `BREAK_OVER` (
 
 ## SQL version
 
-`--engine sql` loads the same data into SQLite and answers with one query (`src/primeops_replay/store.py`):
+`--engine sql` loads the same data into SQLite and answers with one query ([`sql/as_of.sql`](src/primeops_replay/sql/as_of.sql)):
 
 ```bash
 primeops-replay show --engine sql --trade-id T1001 --as-of 2026-11-18T09:50:00+08:00
@@ -205,7 +205,8 @@ CI runs all of it on Python 3.10 to 3.13.
 ```
 src/primeops_replay/
   engine.py   reconciliation rules
-  store.py    SQLite schema and as-of query
+  store.py    loads the data into SQLite and runs the query
+  sql/        schema.sql and as_of.sql
   loader.py   reading and validating input
   models.py   records and statuses
   output.py   text, JSON and CSV output

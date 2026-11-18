@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "primeops-replay"
-version = "1.1.1"
+version = "1.2.0"
 description = "Point-in-time reconciliation of broker executions and client trade allocations."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -20,6 +20,9 @@ primeops-replay = "primeops_replay.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+primeops_replay = ["sql/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
