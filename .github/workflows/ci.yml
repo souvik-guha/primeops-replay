@@ -31,3 +31,5 @@ jobs:
         run: |
           primeops-replay show --trade-id T1001 --as-of 2026-11-18T09:50:00+08:00 | grep BREAK_SHORT
           primeops-replay show --trade-id T1001 --as-of 2026-11-18T09:53:00+08:00 | grep MATCHED
+          primeops-replay show --engine sql --trade-id T1001 --as-of 2026-11-18T09:50:00+08:00 | grep BREAK_SHORT
+          primeops-replay report --as-of 2026-11-18T11:00:00+08:00 --out breaks.csv && cat breaks.csv

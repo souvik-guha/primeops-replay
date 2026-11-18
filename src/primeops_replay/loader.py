@@ -1,9 +1,15 @@
-"""Read and validate executions.csv and allocation_events.jsonl."""
+"""Read and validate executions.csv and allocation_events.jsonl.
+
+IDs, symbols and account names are restricted to letters, digits and . _ -
+so nothing from the files can be read as a formula when the report is opened
+in Excel. Quantities are capped well below SQLite's 64-bit integer limit.
+"""
 
 from __future__ import annotations
 
 import csv
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -11,6 +17,8 @@ from typing import Any, NamedTuple
 from .models import AllocationEvent, Execution, Split
 
 HONG_KONG = timezone(timedelta(hours=8), "HKT")
+MAX_QUANTITY = 10**12
+_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 
 class InputError(ValueError):
@@ -42,7 +50,7 @@ def parse_timestamp(text: str, *, default_tz: timezone | None = None) -> datetim
 def load_executions(path: Path) -> dict[str, Execution]:
     """One row per trade ID. Any bad row stops the load: executions are the reference side."""
     executions: dict[str, Execution] = {}
-    with open(path, newline="", encoding="utf-8") as handle:
+    with open(path, newline="", encoding="utf-8-sig") as handle:
         for line_no, row in enumerate(csv.DictReader(handle), start=2):
             try:
                 execution = Execution(
@@ -68,7 +76,7 @@ def load_allocation_events(path: Path) -> tuple[list[AllocationEvent], list[Reje
     """A bad message is rejected and reported, not fatal: one bad message must not hide every other trade."""
     events: list[AllocationEvent] = []
     rejected: list[Rejection] = []
-    with open(path, encoding="utf-8") as handle:
+    with open(path, encoding="utf-8-sig") as handle:
         for line_no, line in enumerate(handle, start=1):
             if not line.strip():
                 continue
@@ -101,8 +109,8 @@ def load_allocation_events(path: Path) -> tuple[list[AllocationEvent], list[Reje
 
 def _identifier(value: object, what: str) -> str:
     text = str(value).strip() if value is not None else ""
-    if not text:
-        raise InputError(f"{what} is missing")
+    if not _ID.fullmatch(text):
+        raise InputError(f"{what} must be 1-64 letters, digits, '.', '_' or '-', got {text[:40]!r}")
     return text
 
 
@@ -111,8 +119,8 @@ def _quantity(value: object, what: str) -> int:
     if isinstance(value, bool) or not (text.isascii() and text.isdigit()):
         raise InputError(f"{what} must be a positive whole number, got {value!r}")
     number = int(text)
-    if number <= 0:
-        raise InputError(f"{what} must be a positive whole number, got {value!r}")
+    if not 0 < number <= MAX_QUANTITY:
+        raise InputError(f"{what} must be between 1 and {MAX_QUANTITY:,}, got {value!r}")
     return number
 
 

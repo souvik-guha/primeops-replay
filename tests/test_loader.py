@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from primeops_replay.loader import InputError, load_allocation_events, load_executions, parse_timestamp
+from primeops_replay.loader import (
+    MAX_QUANTITY,
+    InputError,
+    load_allocation_events,
+    load_executions,
+    parse_timestamp,
+)
 
 HEADER = "trade_id,symbol,side,executed_quantity,received_at\n"
 GOOD = {
@@ -40,10 +46,21 @@ def test_duplicate_execution_row_is_an_error(tmp_path):
         load_executions(write(tmp_path, "executions.csv", rows))
 
 
-@pytest.mark.parametrize("qty", ["0", "-5", "12.5", "abc"])
+@pytest.mark.parametrize("qty", ["0", "-5", "12.5", "abc", str(MAX_QUANTITY + 1)])
 def test_bad_execution_quantity(tmp_path, qty):
     with pytest.raises(InputError, match="executed_quantity"):
         load_executions(write(tmp_path, "executions.csv", HEADER + f"T1,X,BUY,{qty},2026-11-18T09:30:00+08:00\n"))
+
+
+def test_csv_saved_by_excel_with_a_byte_order_mark_loads(tmp_path):
+    path = write(tmp_path, "executions.csv", HEADER + "T1,X,BUY,100,2026-11-18T09:30:00+08:00\n", "utf-8-sig")
+    assert load_executions(path)["T1"].executed_quantity == 100
+
+
+@pytest.mark.parametrize("trade_id", ["=HYPERLINK(1)", "+1", "-1", "@x", "T 1", ""])
+def test_unsafe_ids_are_refused(tmp_path, trade_id):
+    with pytest.raises(InputError, match="trade_id"):
+        load_executions(write(tmp_path, "executions.csv", HEADER + f"{trade_id},X,BUY,100,2026-11-18T09:30:00+08:00\n"))
 
 
 def test_a_bad_message_is_rejected_and_the_rest_still_load(tmp_path):
@@ -54,7 +71,17 @@ def test_a_bad_message_is_rejected_and_the_rest_still_load(tmp_path):
     assert rejected[1].trade_id is None and "not valid JSON" in rejected[1].note
 
 
+def test_account_with_formula_characters_is_rejected(tmp_path):
+    events, rejected = load_messages(tmp_path, dict(GOOD, allocations=[{"account": "=1+1", "quantity": 100}]))
+    assert events == [] and "account must be" in rejected[0].note
+
+
 def test_account_listed_twice_in_one_split(tmp_path):
     split = [{"account": "A", "quantity": 100}, {"account": "A", "quantity": 50}]
     events, rejected = load_messages(tmp_path, dict(GOOD, allocations=split))
     assert events == [] and "appears twice" in rejected[0].note
+
+
+def test_quantity_too_large_for_sqlite_is_rejected(tmp_path):
+    events, rejected = load_messages(tmp_path, dict(GOOD, allocations=[{"account": "A", "quantity": 2**70}]))
+    assert events == [] and "between 1 and" in rejected[0].note
