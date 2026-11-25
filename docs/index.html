@@ -137,6 +137,9 @@ Trade T1006  0941.HK BUY  as of 2026-11-18T10:44:00+08:00
   <p>The rules run twice: in Python (<code>engine.py</code>) and as one SQLite query using window functions (<code>sql/as_of.sql</code>). Tests check that both give the same answer at every message time, on the sample data and on 300 randomly generated messy cases. Property-based tests (hypothesis) go further: shuffling the input order, resending a message or fill, or splitting a fill in two must not change the answer, and nothing received after the as-of time may leak into it.</p>
   <p>The <code>report</code> command writes open breaks to a CSV for Excel, with cells escaped so nothing in the file can run as a formula.</p>
 
+  <h2>Not covered</h2>
+  <p>Settlement (T+2 in Hong Kong), margin, stock borrow and custodian matching. This tells you the allocation matched, not that the trade settled.</p>
+
   <footer>Built by Souvik Guha · Synthetic data · MIT licence · <a href="https://github.com/souvik-guha/primeops-replay">github.com/souvik-guha/primeops-replay</a></footer>
 </main>
 </body>
