@@ -265,10 +265,6 @@ src/primeops_replay/
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-## Not covered
-
-Settlement (T+2 in Hong Kong), margin, stock borrow and custodian statement matching. This tells you the allocation matched, not that the trade settled. Fees, commissions and the settlement amount aren't calculated, and cancelled or corrected fills aren't handled.
-
 ## License
 
 MIT

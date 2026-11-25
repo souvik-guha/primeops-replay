@@ -15,6 +15,7 @@
 - Two rows with the same `trade_id` used to stop the load as a duplicate; they are now two fills of one trade
 - `Execution` holds a trade's fills; `Execution.single()` builds a trade filled in one piece
 - The summary table has Fills and Avg price columns, and `show` prints the fill count and price after the executed quantity
+- The "Not covered" section is gone from the README and the project page
 
 ### Security and input handling
 - A price must be a plain number above zero with at most 4 decimal places: no signs, exponents, `nan` or thousands separators
