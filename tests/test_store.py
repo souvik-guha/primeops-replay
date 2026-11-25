@@ -2,34 +2,20 @@
 
 import random
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
-from helpers import HKT, at
+from helpers import OPEN, at, state
 
 from primeops_replay.engine import replay
-from primeops_replay.models import AllocationEvent, Execution, Status
+from primeops_replay.models import AllocationEvent, Execution, Fill, Status
 from primeops_replay.store import build_database, replay_sql
-
-OPEN = datetime(2026, 11, 18, 9, 30, tzinfo=HKT)
-
-
-def state(result):
-    return (
-        result.trade_id,
-        result.status,
-        result.executed_quantity,
-        result.allocated_quantity,
-        result.revision_used,
-        result.message_id_used,
-        result.allocations,
-    )
 
 
 def check_parity(executions, events):
     """Compare every trade at every arrival time and one microsecond either side."""
     conn = build_database(executions, events)
     tick = timedelta(microseconds=1)
-    times = {x.received_at for x in executions.values()} | {e.received_at for e in events}
+    times = {f.received_at for x in executions.values() for f in x.fills} | {e.received_at for e in events}
     instants = sorted({t + d for t in times for d in (-tick, timedelta(0), tick)})
     trade_ids = sorted(set(executions) | {e.trade_id for e in events})
     for as_of in instants:
@@ -44,8 +30,20 @@ def messy_case(rng):
     for t in range(rng.randint(1, 4)):
         trade_id = f"T{t}"
         if rng.random() < 0.85:
-            filled_at = OPEN + timedelta(minutes=rng.randint(0, 20))
-            executions[trade_id] = Execution(trade_id, "TEST", "BUY", rng.choice([500, 1_000]), filled_at)
+            priced = rng.choice(["all", "all", "none", "mixed"])
+            pieces = tuple(
+                Fill(
+                    fill_id=f"F{t}-{rng.randint(0, 3)}",  # a repeated ID is a resend
+                    quantity=rng.choice([100, 250, 500]),
+                    received_at=OPEN + timedelta(minutes=rng.randint(0, 20)),
+                    price_e4=rng.choice([741_000, 742_500, 743_000])
+                    if priced == "all" or (priced == "mixed" and rng.random() < 0.5)
+                    else None,
+                    sequence=n,
+                )
+                for n in range(1, rng.randint(1, 4) + 1)
+            )
+            executions[trade_id] = Execution(trade_id, "TEST", "BUY", pieces)
         for _ in range(rng.randint(0, 6)):
             split = tuple((f"ACC-{a}", rng.choice([100, 250, 500])) for a in "AB"[: rng.randint(1, 2)])
             events.append(
@@ -85,15 +83,18 @@ def test_split_keeps_the_client_order(sample):
     assert result.allocations == (("ACC-A", 4_800), ("ACC-C", 3_600))
 
 
-def test_query_is_valid_outside_sqlite_leniency(sample):
-    """Every selected column in the GROUP BY must be grouped or aggregated."""
+def test_query_is_valid_outside_sqlite_leniency():
+    """Every selected column in a GROUP BY must be grouped or aggregated."""
     from primeops_replay.store import AS_OF_QUERY
 
-    grouped = AS_OF_QUERY.split("GROUP BY", 1)[1].split("\n", 1)[0]
+    clauses = [part.split("\n", 1)[0] for part in AS_OF_QUERY.split("GROUP BY")[1:]]
+    assert len(clauses) == 2  # allocated and executed
     for column in ("m.trade_id", "m.arrival_seq", "m.message_id", "m.revision", "m.received_at"):
-        assert column in grouped
+        assert column in clauses[0]
+    assert clauses[1].strip() == "trade_id"
 
 
 def test_duplicates_are_stored_not_deleted(sample):
     conn: sqlite3.Connection = build_database(*sample)
     assert conn.execute("SELECT COUNT(*) FROM allocation_messages WHERE message_id = 'M-1002'").fetchone() == (2,)
+    assert conn.execute("SELECT COUNT(*) FROM fills WHERE fill_id = 'F-1006-2'").fetchone() == (2,)

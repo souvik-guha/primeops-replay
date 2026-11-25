@@ -1,12 +1,19 @@
 -- Tables for the SQL engine. Timestamps are fixed-width UTC text,
 -- so comparing the text compares the time.
 
-CREATE TABLE executions (
-    trade_id          TEXT PRIMARY KEY,
-    symbol            TEXT NOT NULL,
-    side              TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
-    executed_quantity INTEGER NOT NULL CHECK (executed_quantity > 0),
-    received_at       TEXT NOT NULL
+CREATE TABLE trades (
+    trade_id TEXT PRIMARY KEY,
+    symbol   TEXT NOT NULL,
+    side     TEXT NOT NULL CHECK (side IN ('BUY', 'SELL'))
+);
+
+CREATE TABLE fills (
+    arrival_seq INTEGER PRIMARY KEY,  -- arrival order: received_at, then file line
+    fill_id     TEXT NOT NULL,        -- not unique: resends are kept
+    trade_id    TEXT NOT NULL REFERENCES trades (trade_id),
+    quantity    INTEGER NOT NULL CHECK (quantity > 0),
+    price_e4    INTEGER CHECK (price_e4 > 0),  -- price in units of 0.0001; NULL if the file has no prices
+    received_at TEXT NOT NULL
 );
 
 CREATE TABLE allocation_messages (

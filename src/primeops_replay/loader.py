@@ -2,7 +2,8 @@
 
 IDs, symbols and account names are restricted to letters, digits and . _ -
 so nothing from the files can be read as a formula when the report is opened
-in Excel. Quantities are capped well below SQLite's 64-bit integer limit.
+in Excel. Quantities, prices and fill values are capped well below SQLite's
+64-bit integer limit, so the SQL engine's sums are exact.
 """
 
 from __future__ import annotations
@@ -14,11 +15,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from .models import AllocationEvent, Execution, Split
+from .models import PRICE_SCALE, AllocationEvent, Execution, Fill, Split
 
 HONG_KONG = timezone(timedelta(hours=8), "HKT")
 MAX_QUANTITY = 10**12
+MAX_FILL_VALUE_E4 = 10**15  # quantity x price for one fill, in units of 0.0001 (100 billion)
+MAX_TRADE_VALUE_E4 = 10**18  # the same, summed over a trade's fills
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+_PRICE = re.compile(r"[0-9]{1,9}(?:\.[0-9]{1,4})?")
 
 
 class InputError(ValueError):
@@ -48,28 +52,58 @@ def parse_timestamp(text: str, *, default_tz: timezone | None = None) -> datetim
 
 
 def load_executions(path: Path) -> dict[str, Execution]:
-    """One row per trade ID. Any bad row stops the load: executions are the reference side."""
-    executions: dict[str, Execution] = {}
+    """One row per fill. Rows with the same trade_id are fills of the same trade.
+
+    Optional columns: price (then every row needs one) and fill_id. Any bad row
+    stops the load: executions are the reference side.
+    """
+    fills: dict[str, list[Fill]] = {}
+    terms: dict[str, tuple[str, str]] = {}  # trade_id -> (symbol, side)
+    seen_ids: dict[str, tuple[str, str, str, int, int | None]] = {}
     with open(path, newline="", encoding="utf-8-sig") as handle:
-        for line_no, row in enumerate(csv.DictReader(handle), start=2):
+        reader = csv.DictReader(handle)
+        columns = set(reader.fieldnames or [])
+        for line_no, row in enumerate(reader, start=2):
             try:
-                execution = Execution(
-                    trade_id=_identifier(row["trade_id"], "trade_id"),
-                    symbol=_identifier(row["symbol"], "symbol"),
-                    side=str(row["side"]).strip().upper(),
-                    executed_quantity=_quantity(row["executed_quantity"], "executed_quantity"),
-                    received_at=parse_timestamp(str(row["received_at"])),
-                )
+                trade_id = _identifier(row["trade_id"], "trade_id")
+                symbol = _identifier(row["symbol"], "symbol")
+                side = str(row["side"]).strip().upper()
+                quantity = _quantity(row["executed_quantity"], "executed_quantity")
+                received_at = parse_timestamp(str(row["received_at"]))
+                price_e4 = _price(row["price"]) if "price" in columns else None
+                given_id = _optional_identifier(row.get("fill_id"), "fill_id") if "fill_id" in columns else None
             except KeyError as exc:
                 raise InputError(f"{path.name} line {line_no}: missing column {exc}") from None
             except InputError as exc:
                 raise InputError(f"{path.name} line {line_no}: {exc}") from None
-            if execution.side not in ("BUY", "SELL"):
-                raise InputError(f"{path.name} line {line_no}: side must be BUY or SELL")
-            if execution.trade_id in executions:
-                raise InputError(f"{path.name} line {line_no}: duplicate trade_id {execution.trade_id}")
-            executions[execution.trade_id] = execution
+            label = f"{path.name} line {line_no}"
+            if side not in ("BUY", "SELL"):
+                raise InputError(f"{label}: side must be BUY or SELL")
+            if price_e4 is not None and quantity * price_e4 > MAX_FILL_VALUE_E4:
+                raise InputError(f"{label}: quantity x price must stay under {MAX_FILL_VALUE_E4 // PRICE_SCALE:,}")
+            if terms.setdefault(trade_id, (symbol, side)) != (symbol, side):
+                was_symbol, was_side = terms[trade_id]
+                raise InputError(
+                    f"{label}: {trade_id} was {was_symbol} {was_side} on an earlier row, not {symbol} {side}"
+                )
+            fill_id = given_id or f"{trade_id}#{line_no}"  # '#' can't appear in a real ID, so this never collides
+            content = (trade_id, symbol, side, quantity, price_e4)
+            if given_id and seen_ids.setdefault(given_id, content) != content:
+                raise InputError(f"{label}: fill {given_id} appears twice with different content")
+            fills.setdefault(trade_id, []).append(Fill(fill_id, quantity, received_at, price_e4, line_no))
+    executions = {t: Execution(t, *terms[t], tuple(rows)) for t, rows in fills.items()}
+    for execution in executions.values():
+        _check_trade_totals(path, execution)
     return executions
+
+
+def _check_trade_totals(path: Path, execution: Execution) -> None:
+    """Keep a trade's total quantity and value inside the limits SQLite can add up exactly."""
+    unique = {fill.fill_id: fill for fill in execution.fills}.values()  # a resend counts once
+    if sum(f.quantity for f in unique) > MAX_QUANTITY:
+        raise InputError(f"{path.name}: the fills of {execution.trade_id} add up to more than {MAX_QUANTITY:,} shares")
+    if sum(f.notional_e4 or 0 for f in unique) > MAX_TRADE_VALUE_E4:
+        raise InputError(f"{path.name}: the fills of {execution.trade_id} add up to too large a value")
 
 
 def load_allocation_events(path: Path) -> tuple[list[AllocationEvent], list[Rejection]]:
@@ -112,6 +146,25 @@ def _identifier(value: object, what: str) -> str:
     if not _ID.fullmatch(text):
         raise InputError(f"{what} must be 1-64 letters, digits, '.', '_' or '-', got {text[:40]!r}")
     return text
+
+
+def _optional_identifier(value: object, what: str) -> str | None:
+    """A blank cell means the file gave no ID."""
+    if value is None or not str(value).strip():
+        return None
+    return _identifier(value, what)
+
+
+def _price(value: object) -> int:
+    """A price as whole units of 0.0001. Plain decimals only: up to 4 decimal places, above zero."""
+    text = "" if value is None else str(value).strip()
+    if not _PRICE.fullmatch(text):
+        raise InputError(f"price must be a positive number with at most 4 decimal places, got {text[:40]!r}")
+    whole, _, fraction = text.partition(".")
+    price_e4 = int(whole) * PRICE_SCALE + int(fraction.ljust(4, "0"))
+    if price_e4 == 0:
+        raise InputError(f"price must be above zero, got {text!r}")
+    return price_e4
 
 
 def _quantity(value: object, what: str) -> int:

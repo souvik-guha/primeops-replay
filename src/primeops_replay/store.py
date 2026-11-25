@@ -1,7 +1,7 @@
 """The same as-of rules as engine.py, written as SQL on SQLite.
 
-The schema and the as-of query live in sql/. Duplicate messages are stored
-as they arrived and filtered by the query.
+The schema and the as-of query live in sql/. Duplicate messages and resent
+fills are stored as they arrived and filtered by the query.
 """
 
 from __future__ import annotations
@@ -35,8 +35,19 @@ def build_database(
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
     conn.executemany(
-        "INSERT INTO executions VALUES (?, ?, ?, ?, ?)",
-        [(x.trade_id, x.symbol, x.side, x.executed_quantity, to_db_time(x.received_at)) for x in executions.values()],
+        "INSERT INTO trades VALUES (?, ?, ?)",
+        [(x.trade_id, x.symbol, x.side) for x in executions.values()],
+    )
+    arrived_fills = sorted(
+        ((x.trade_id, fill) for x in executions.values() for fill in x.fills),
+        key=lambda pair: (pair[1].received_at, pair[1].sequence, pair[0]),
+    )
+    conn.executemany(
+        "INSERT INTO fills VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (seq, fill.fill_id, trade_id, fill.quantity, fill.price_e4, to_db_time(fill.received_at))
+            for seq, (trade_id, fill) in enumerate(arrived_fills, start=1)
+        ],
     )
     arrived = sorted(events, key=lambda e: (e.received_at, e.sequence))
     for seq, event in enumerate(arrived, start=1):
@@ -56,7 +67,7 @@ def replay_sql(conn: sqlite3.Connection, as_of: datetime, trade_id: str | None =
     """State only (status, quantities, revision in force). Explanatory notes come from engine.py."""
     results = []
     rows = conn.execute(AS_OF_QUERY, {"as_of": to_db_time(as_of), "trade_id": trade_id}).fetchall()
-    for tid, executed, allocated, revision, message_id, arrival_seq, received_text in rows:
+    for tid, executed, allocated, revision, message_id, arrival_seq, received_text, fill_count, notional in rows:
         split = tuple(conn.execute(SPLIT_QUERY, (arrival_seq,)).fetchall()) if arrival_seq else ()
         results.append(
             ReconResult(
@@ -69,6 +80,8 @@ def replay_sql(conn: sqlite3.Connection, as_of: datetime, trade_id: str | None =
                 revision_used=revision,
                 message_id_used=message_id,
                 used_received_at=_from_db_time(received_text) if received_text else None,
+                fill_count=fill_count,
+                notional_e4=notional,
             )
         )
     return results

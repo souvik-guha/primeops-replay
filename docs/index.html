@@ -84,7 +84,7 @@
 <pre><span class="dim">$</span> primeops-replay show --trade-id T1001 --as-of 2026-11-18T09:50:00+08:00
 Trade T1001  0700.HK BUY  as of 2026-11-18T09:50:00+08:00
   Status      <span class="bad">BREAK_SHORT</span>
-  Executed    10,000
+  Executed    10,000  <span class="dim">(1 fill at 385.4000)</span>
   Allocated   9,500  <span class="dim">(revision 1, message M-1001)</span>
     ACC-A      6,000
     ACC-B      3,500
@@ -93,13 +93,37 @@ Trade T1001  0700.HK BUY  as of 2026-11-18T09:50:00+08:00
 <pre><span class="dim">$</span> primeops-replay show --trade-id T1001 --as-of 2026-11-18T09:53:00+08:00
 Trade T1001  0700.HK BUY  as of 2026-11-18T09:53:00+08:00
   Status      <span class="ok">MATCHED</span>
-  Executed    10,000
+  Executed    10,000  <span class="dim">(1 fill at 385.4000)</span>
   Allocated   10,000  <span class="dim">(revision 2, message M-1002)</span>
     ACC-A      6,000
     ACC-B      4,000
   Difference  0
   Notes
     - M-1002: duplicate message, ignored</pre>
+
+  <h2>Filled in pieces</h2>
+  <p>A block order is often filled in several fills at different prices. The tool adds them up as they arrive and shows the average price. The broker buys 3,000 shares of 0941.HK, and the client allocates all 3,000 before the last fill comes in.</p>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Time</th><th>Message</th><th>Executed</th><th>Result</th></tr>
+    <tr><td class="mono">10:40</td><td>Fill: 1,000 at 74.200</td><td class="mono">1,000</td><td><span class="chip amber">AWAITING_ALLOCATION</span></td></tr>
+    <tr><td class="mono">10:41</td><td>Fill: 1,500 at 74.250</td><td class="mono">2,500</td><td><span class="chip amber">AWAITING_ALLOCATION</span></td></tr>
+    <tr><td class="mono">10:42</td><td>Client allocates 2,000 / 1,000</td><td class="mono">2,500</td><td><span class="chip red">BREAK_OVER</span>, 500 over</td></tr>
+    <tr><td class="mono">10:43</td><td>Second fill sent again</td><td class="mono">2,500</td><td><span class="chip red">BREAK_OVER</span>, duplicate ignored</td></tr>
+    <tr><td class="mono">10:44</td><td>Fill: 500 at 74.300</td><td class="mono">3,000</td><td><span class="chip green">MATCHED</span></td></tr>
+  </table>
+  </div>
+<pre style="margin-top:14px"><span class="dim">$</span> primeops-replay show --trade-id T1006 --as-of 2026-11-18T10:44:00+08:00
+Trade T1006  0941.HK BUY  as of 2026-11-18T10:44:00+08:00
+  Status      <span class="ok">MATCHED</span>
+  Executed    3,000  <span class="dim">(3 fills, average price 74.2417)</span>
+  Allocated   3,000  <span class="dim">(revision 1, message M-6001)</span>
+    ACC-A      2,000
+    ACC-B      1,000
+  Difference  0
+  Notes
+    - F-1006-2: duplicate fill, ignored</pre>
+  <p>The average is the total value divided by the quantity: 222,725 divided by 3,000 is 74.24166..., rounded half up to 74.2417. Prices are held as whole units of 0.0001, so the sums and the average are exact, with no floating point.</p>
 
   <h2>Why it's built this way</h2>
   <div class="grid">
@@ -110,11 +134,11 @@ Trade T1001  0700.HK BUY  as of 2026-11-18T09:53:00+08:00
   </div>
 
   <h2>Python and SQL</h2>
-  <p>The rules run twice: in Python (<code>engine.py</code>) and as one SQLite query using window functions (<code>sql/as_of.sql</code>). Tests check that both give the same answer at every message time, on the sample data and on 300 randomly generated messy cases.</p>
+  <p>The rules run twice: in Python (<code>engine.py</code>) and as one SQLite query using window functions (<code>sql/as_of.sql</code>). Tests check that both give the same answer at every message time, on the sample data and on 300 randomly generated messy cases. Property-based tests (hypothesis) go further: shuffling the input order, resending a message or fill, or splitting a fill in two must not change the answer, and nothing received after the as-of time may leak into it.</p>
   <p>The <code>report</code> command writes open breaks to a CSV for Excel, with cells escaped so nothing in the file can run as a formula.</p>
 
   <h2>Not covered</h2>
-  <p>Settlement (T+2 in Hong Kong), margin, stock borrow and custodian matching. This tells you the allocation matched, not that the trade settled.</p>
+  <p>Settlement (T+2 in Hong Kong), margin, stock borrow and custodian matching. This tells you the allocation matched, not that the trade settled. Fees, commissions and cancelled or corrected fills aren't handled either.</p>
 
   <footer>Built by Souvik Guha · Synthetic data · MIT licence · <a href="https://github.com/souvik-guha/primeops-replay">github.com/souvik-guha/primeops-replay</a></footer>
 </main>

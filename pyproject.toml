@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "primeops-replay"
-version = "1.2.0"
+version = "1.3.0"
 description = "Point-in-time reconciliation of broker executions and client trade allocations."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,7 @@ authors = [{ name = "Souvik Guha" }]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest==9.0.3", "ruff==0.7.4", "mypy==1.13.0"]
+dev = ["pytest==9.0.3", "hypothesis==6.168.5", "ruff==0.7.4", "mypy==1.13.0"]
 
 [project.scripts]
 primeops-replay = "primeops_replay.cli:main"

@@ -1,9 +1,10 @@
 from datetime import timedelta, timezone
 
-from helpers import at, execution, message
+import pytest
+from helpers import at, execution, fills, message
 
 from primeops_replay.engine import replay, replay_all
-from primeops_replay.models import Status
+from primeops_replay.models import Status, format_e4, round_average_e4
 
 # The four release criteria, on sample trade T1001.
 
@@ -117,4 +118,118 @@ def test_replay_all_covers_both_files(sample):
         "T1003": Status.MATCHED,
         "T1004": Status.MATCHED,
         "T1005": Status.AWAITING_ALLOCATION,
+        "T1006": Status.MATCHED,
     }
+
+
+# Fills: a trade filled in pieces
+
+THREE_FILLS = fills(
+    ("F1", 1_000, "10:40", "74.2"),
+    ("F2", 1_500, "10:41", "74.25"),
+    ("F3", 500, "10:44", "74.3"),
+)
+
+
+def test_executed_quantity_is_the_sum_of_the_fills_that_had_arrived():
+    assert replay("T1", at("10:39"), THREE_FILLS, []).executed_quantity is None
+    assert replay("T1", at("10:40"), THREE_FILLS, []).executed_quantity == 1_000
+    assert replay("T1", at("10:43"), THREE_FILLS, []).executed_quantity == 2_500
+    assert replay("T1", at("10:44"), THREE_FILLS, []).executed_quantity == 3_000
+
+
+def test_average_price_is_weighted_by_quantity_and_rounded_half_up():
+    two = replay("T1", at("10:43"), THREE_FILLS, [])
+    assert format_e4(two.average_price_e4) == "74.2300"  # (1000 x 74.20 + 1500 x 74.25) / 2500, exact
+    three = replay("T1", at("10:44"), THREE_FILLS, [])
+    assert (three.fill_count, three.notional_e4) == (3, 2_227_250_000)
+    assert format_e4(three.average_price_e4) == "74.2417"  # 74.24166...
+
+
+@pytest.mark.parametrize(
+    ("notional_e4", "quantity", "expected"),
+    [
+        (1, 2, 1),  # 0.5 rounds up
+        (3, 2, 2),  # 1.5 rounds up
+        (5, 4, 1),  # 1.25 rounds down
+        (7, 4, 2),  # 1.75 rounds up
+        (10, 3, 3),  # 3.33 rounds down
+        (11, 3, 4),  # 3.67 rounds up
+        (10**18, 10**12, 10**6),  # at the loader's limits
+    ],
+)
+def test_rounding_is_half_up_in_whole_numbers(notional_e4, quantity, expected):
+    assert round_average_e4(notional_e4, quantity) == expected
+
+
+def test_a_break_can_open_and_close_while_fills_are_still_arriving():
+    events = [message("M1", 1, "10:42", {"A": 3_000})]
+    assert replay("T1", at("10:42"), THREE_FILLS, events).status is Status.BREAK_OVER
+    assert replay("T1", at("10:43"), THREE_FILLS, events).difference == -500
+    assert replay("T1", at("10:44"), THREE_FILLS, events).status is Status.MATCHED
+
+
+def test_a_resent_fill_counts_once():
+    resent = fills(("F1", 1_000, "10:40", "74.2"), ("F1", 1_000, "10:45", "74.2"))
+    before, after = replay("T1", at("10:44"), resent, []), replay("T1", at("10:45"), resent, [])
+    assert (after.executed_quantity, after.fill_count, after.notional_e4) == (1_000, 1, before.notional_e4)
+    assert after.notes == ("F1: duplicate fill, ignored",)
+    assert before.notes == ()
+
+
+def test_a_repeated_fill_id_with_different_content_is_flagged_and_the_first_stands():
+    # The loader refuses this file; the engine still behaves if it is handed the data directly.
+    odd = fills(("F1", 1_000, "10:40", "74.2"), ("F1", 2_000, "10:45", "74.2"))
+    result = replay("T1", at("10:46"), odd, [])
+    assert result.executed_quantity == 1_000
+    assert result.notes == ("F1: repeated fill ID with different content, ignored",)
+
+
+def test_without_prices_there_is_no_average():
+    result = replay("T1", at("10:44"), fills(("F1", 1_000, "10:40", None), ("F2", 500, "10:41", None)), [])
+    assert (result.executed_quantity, result.fill_count) == (1_500, 2)
+    assert (result.average_price_e4, result.notional_e4) == (None, None)
+
+
+def test_one_fill_without_a_price_withholds_the_average_rather_than_guessing():
+    mixed = fills(("F1", 1_000, "10:40", "74.2"), ("F2", 500, "10:41", None))
+    result = replay("T1", at("10:44"), mixed, [])
+    assert result.executed_quantity == 1_500
+    assert result.average_price_e4 is None
+    assert replay("T1", at("10:40"), mixed, []).average_price_e4 == 742_000  # before the unpriced fill arrived
+
+
+def test_fills_at_the_same_second_are_all_counted():
+    same = fills(("F1", 100, "10:40", "10"), ("F2", 200, "10:40", "11"))
+    result = replay("T1", at("10:40"), same, [])
+    assert (result.executed_quantity, result.fill_count) == (300, 2)
+
+
+def test_allocation_before_the_first_fill_is_still_awaiting_execution():
+    events = [message("M1", 1, "10:30", {"A": 3_000})]
+    assert replay("T1", at("10:35"), THREE_FILLS, events).status is Status.AWAITING_EXECUTION
+
+
+def test_a_trade_with_no_fill_yet_has_no_fill_count():
+    result = replay("T1", at("10:00"), THREE_FILLS, [])
+    assert (result.fill_count, result.notional_e4, result.average_price_e4) == (0, None, None)
+    assert result.status is Status.NOT_YET_RECEIVED
+
+
+def test_fill_order_in_memory_does_not_change_the_answer():
+    base = THREE_FILLS["T1"]
+    reordered = {"T1": type(base)(base.trade_id, base.symbol, base.side, tuple(reversed(base.fills)))}
+    for hhmm in ("10:40", "10:43", "10:44"):
+        assert replay("T1", at(hhmm), reordered, []) == replay("T1", at(hhmm), THREE_FILLS, [])
+
+
+def test_sample_trade_t1006_walks_through_the_fill_rules(sample):
+    assert replay("T1006", at("10:42"), *sample).status is Status.BREAK_OVER  # 2,500 filled, 3,000 allocated
+    resent = replay("T1006", at("10:43"), *sample)
+    assert (resent.executed_quantity, resent.fill_count, resent.notes) == (
+        2_500,
+        2,
+        ("F-1006-2: duplicate fill, ignored",),
+    )
+    done = replay("T1006", at("10:44"), *sample)
+    assert (done.status, done.executed_quantity, format_e4(done.average_price_e4)) == (Status.MATCHED, 3_000, "74.2417")

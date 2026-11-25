@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .models import Execution, ReconResult
+from .models import Execution, ReconResult, format_e4
 
 REPORT_COLUMNS = [
     "as_of",
@@ -18,6 +18,8 @@ REPORT_COLUMNS = [
     "executed_quantity",
     "allocated_quantity",
     "difference",
+    "fills",
+    "average_price",
     "revision_used",
     "message_id_used",
     "allocations",
@@ -32,7 +34,7 @@ def render_trade(result: ReconResult, execution: Execution | None) -> str:
     lines = [
         f"{header}  as of {result.as_of.isoformat()}",
         f"  Status      {result.status}",
-        f"  Executed    {_qty(result.executed_quantity)}",
+        f"  Executed    {_qty(result.executed_quantity)}{_fill_summary(result)}",
     ]
     if result.revision_used is None:
         lines.append("  Allocated   -  (no allocation received)")
@@ -55,12 +57,14 @@ def render_trade(result: ReconResult, execution: Execution | None) -> str:
 def render_summary(results: list[ReconResult], as_of: datetime) -> str:
     lines = [
         f"As of {as_of.isoformat()}",
-        f"  {'Trade':<8}{'Status':<21}{'Executed':>10}{'Allocated':>11}{'Diff':>8}",
+        f"  {'Trade':<8}{'Status':<21}{'Executed':>10}{'Fills':>6}{'Avg price':>11}{'Allocated':>11}{'Diff':>8}",
     ]
     for r in results:
         diff = "-" if r.difference is None else f"{r.difference:,}"
+        fills = str(r.fill_count) if r.fill_count else "-"
         lines.append(
-            f"  {r.trade_id:<8}{r.status:<21}{_qty(r.executed_quantity):>10}{_qty(r.allocated_quantity):>11}{diff:>8}"
+            f"  {r.trade_id:<8}{r.status:<21}{_qty(r.executed_quantity):>10}{fills:>6}{_price(r.average_price_e4):>11}"
+            f"{_qty(r.allocated_quantity):>11}{diff:>8}"
         )
     return "\n".join(lines)
 
@@ -71,6 +75,9 @@ def as_dict(result: ReconResult) -> dict[str, Any]:
         "as_of": result.as_of.isoformat(),
         "status": result.status.value,
         "executed_quantity": result.executed_quantity,
+        "fills": result.fill_count,
+        "average_price": None if result.average_price_e4 is None else format_e4(result.average_price_e4),
+        "notional": None if result.notional_e4 is None else format_e4(result.notional_e4),
         "allocated_quantity": result.allocated_quantity,
         "difference": result.difference,
         "revision_used": result.revision_used,
@@ -93,7 +100,14 @@ def write_report(path: Path, results: list[ReconResult], executions: dict[str, E
                 execution.side if execution else "",
                 r.status.value,
             ]
-            numbers = [r.executed_quantity, r.allocated_quantity, r.difference, r.revision_used]
+            numbers = [
+                r.executed_quantity,
+                r.allocated_quantity,
+                r.difference,
+                r.fill_count,
+                _price(r.average_price_e4, blank=""),
+                r.revision_used,
+            ]
             tail = [
                 r.message_id_used or "",
                 "; ".join(f"{account} {quantity}" for account, quantity in r.allocations),
@@ -109,3 +123,18 @@ def _cell(text: str) -> str:
 
 def _qty(value: int | None) -> str:
     return "-" if value is None else f"{value:,}"
+
+
+def _price(value_e4: int | None, blank: str = "-") -> str:
+    return blank if value_e4 is None else format_e4(value_e4)
+
+
+def _fill_summary(result: ReconResult) -> str:
+    """'(3 fills, average price 74.2417)'. Nothing for a single fill with no price."""
+    if result.fill_count == 0 or (result.fill_count == 1 and result.average_price_e4 is None):
+        return ""
+    if result.average_price_e4 is None:
+        return f"  ({result.fill_count} fills)"
+    if result.fill_count == 1:
+        return f"  (1 fill at {format_e4(result.average_price_e4)})"
+    return f"  ({result.fill_count} fills, average price {format_e4(result.average_price_e4)})"

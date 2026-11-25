@@ -25,6 +25,8 @@ The broker buys 10,000 Tencent (0700.HK) shares for a client:
 
 Asked as of 09:50, it still shows the 500-share break, because revision 2 hadn't arrived yet (it came in two minutes later).
 
+Block orders often fill in pieces, at different prices. A trade can have several fills, and the tool adds them up as they arrive. See [Fills](#fills).
+
 ## Running it
 
 Python 3.10 or later. No dependencies beyond the standard library; the dev extras add pytest, ruff and mypy.
@@ -44,7 +46,7 @@ primeops-replay show --trade-id T1001 --as-of 2026-11-18T09:50:00+08:00
 ```
 Trade T1001  0700.HK BUY  as of 2026-11-18T09:50:00+08:00
   Status      BREAK_SHORT
-  Executed    10,000
+  Executed    10,000  (1 fill at 385.4000)
   Allocated   9,500  (revision 1, message M-1001)
     ACC-A      6,000
     ACC-B      3,500
@@ -60,7 +62,7 @@ primeops-replay show --trade-id T1001 --as-of 2026-11-18T09:53:00+08:00
 ```
 Trade T1001  0700.HK BUY  as of 2026-11-18T09:53:00+08:00
   Status      MATCHED
-  Executed    10,000
+  Executed    10,000  (1 fill at 385.4000)
   Allocated   10,000  (revision 2, message M-1002)
     ACC-A      6,000
     ACC-B      4,000
@@ -77,16 +79,53 @@ primeops-replay summary --as-of 2026-11-18T11:00:00+08:00
 
 ```
 As of 2026-11-18T11:00:00+08:00
-  Trade   Status                 Executed  Allocated    Diff
-  T1001   MATCHED                  10,000     10,000       0
-  T1002   BREAK_OVER                8,000      8,400    -400
-  T1003   MATCHED                   5,000      5,000       0
-  T1004   MATCHED                   2,000      2,000       0
-  T1005   AWAITING_ALLOCATION       3,000          -       -
+  Trade   Status                 Executed Fills  Avg price  Allocated    Diff
+  T1001   MATCHED                  10,000     1   385.4000     10,000       0
+  T1002   BREAK_OVER                8,000     1    61.8500      8,400    -400
+  T1003   MATCHED                   5,000     1    18.9400      5,000       0
+  T1004   MATCHED                   2,000     1   331.2000      2,000       0
+  T1005   AWAITING_ALLOCATION       3,000     1    69.1500          -       -
+  T1006   MATCHED                   3,000     3    74.2417      3,000       0
   message M-4002: rejected, quantity for ACC-A must be a positive whole number, got -500
 ```
 
 Add `--json` for JSON output. A time without an offset (`2026-11-18T09:50`) is taken as Hong Kong time.
+
+## Fills
+
+A block order is often filled in pieces. `executions.csv` has one row per fill, and rows with the same `trade_id` are fills of the same trade. As of any time, the executed quantity is the sum of the fills that had arrived by then, and the average price is the total value (quantity times price, summed) divided by the executed quantity.
+
+Trade T1006 buys 3,000 shares of 0941.HK. The first two fills arrive, the client allocates all 3,000, and the last fill comes in two minutes later. A fill that is sent twice counts once.
+
+| Time  | Message | Executed | Result |
+|-------|---------|----------|--------|
+| 10:40 | Fill F-1006-1: 1,000 at 74.200 | 1,000 | `AWAITING_ALLOCATION` |
+| 10:41 | Fill F-1006-2: 1,500 at 74.250 | 2,500 | `AWAITING_ALLOCATION` |
+| 10:42 | Allocation rev 1: ACC-A 2,000, ACC-B 1,000 | 2,500 | `BREAK_OVER`, 500 over-allocated |
+| 10:43 | Fill F-1006-2 again (duplicate) | 2,500 | still `BREAK_OVER` |
+| 10:44 | Fill F-1006-3: 500 at 74.300 | 3,000 | `MATCHED` |
+
+```bash
+primeops-replay show --trade-id T1006 --as-of 2026-11-18T10:43:00+08:00
+```
+
+```
+Trade T1006  0941.HK BUY  as of 2026-11-18T10:43:00+08:00
+  Status      BREAK_OVER
+  Executed    2,500  (2 fills, average price 74.2300)
+  Allocated   3,000  (revision 1, message M-6001)
+    ACC-A      2,000
+    ACC-B      1,000
+  Difference  500 over-allocated
+  Notes
+    - F-1006-2: duplicate fill, ignored
+```
+
+At 10:44 the last fill arrives: 3 fills, average price 74.2417 (222,725 divided by 3,000 is 74.24166..., rounded half up to 4 decimals).
+
+Prices are held as whole units of 0.0001, so sums and averages are exact in Python and in SQLite, with no floating point. In `--json` the average price and the total value are strings (`"74.2417"`, `"222725.0000"`) so they aren't rounded again by a JSON reader.
+
+The tool doesn't know the order quantity, so while fills are still arriving a trade can show a break that closes by itself when the last fill lands.
 
 ## Rules
 
@@ -95,7 +134,9 @@ Add `--json` for JSON output. A time without an offset (`2026-11-18T09:50`) is t
 3. A repeated message ID counts once. If the repeat has different content, it is flagged.
 4. A higher revision replaces the whole split; it is never added on top. A lower revision that turns up later is stale and ignored. Two different messages with the same revision conflict, and the first one stands.
 5. A malformed message is rejected with a reason and the previous valid revision stays in force.
-6. The input files are never modified, so replaying an earlier time always gives the same answer.
+6. A trade's fills add up: executed quantity is the sum of the fills received by the as-of time, and the average price is weighted by quantity, rounded half up to 4 decimals.
+7. A repeated fill ID counts once, from its first arrival. The same fill ID with different content stops the load, because executions are the reference side.
+8. The input files are never modified, so replaying an earlier time always gives the same answer.
 
 Statuses: `AWAITING_ALLOCATION`, `BREAK_SHORT` (under-allocated), `BREAK_OVER` (over-allocated), `MATCHED`, `AWAITING_EXECUTION` (allocation came first), `NOT_YET_RECEIVED`, `UNKNOWN_TRADE` (exit code 2).
 
@@ -113,8 +154,10 @@ The query works in steps:
 - `first_copies` uses `ROW_NUMBER() OVER (PARTITION BY trade_id, message_id ...)` to drop duplicates.
 - `in_force` ranks by revision to find the instruction in force.
 - `allocated` sums its split.
+- `visible_fills` and `first_fills` do the same two steps for fills, by fill ID.
+- `executed` adds up the quantity and value of the fills that count. There is no value unless every one of them has a price.
 
-Duplicates are stored as received and filtered out by the query, not deleted. The SQL engine returns the state; the explanatory notes come from the Python engine either way. The tests check the two engines agree at every message time.
+Duplicate messages and resent fills are stored as received and filtered out by the query, not deleted. The SQL engine returns the state; the explanatory notes come from the Python engine either way. The tests check the two engines agree at every message time.
 
 ## Break report
 
@@ -123,21 +166,23 @@ primeops-replay report --as-of 2026-11-18T11:00:00+08:00 --out breaks.csv
 ```
 
 ```
-as_of,trade_id,symbol,side,status,executed_quantity,allocated_quantity,difference,revision_used,message_id_used,allocations,notes
-2026-11-18T11:00:00+08:00,T1002,0005.HK,SELL,BREAK_OVER,8000,8400,-400,1,M-2001,ACC-A 4800; ACC-C 3600,
-2026-11-18T11:00:00+08:00,T1004,0388.HK,BUY,MATCHED,2000,2000,0,1,M-4001,ACC-A 2000,"message M-4002: rejected, quantity for ACC-A must be a positive whole number, got -500"
+as_of,trade_id,symbol,side,status,executed_quantity,allocated_quantity,difference,fills,average_price,revision_used,message_id_used,allocations,notes
+2026-11-18T11:00:00+08:00,T1002,0005.HK,SELL,BREAK_OVER,8000,8400,-400,1,61.8500,1,M-2001,ACC-A 4800; ACC-C 3600,
+2026-11-18T11:00:00+08:00,T1004,0388.HK,BUY,MATCHED,2000,2000,0,1,331.2000,1,M-4001,ACC-A 2000,"message M-4002: rejected, quantity for ACC-A must be a positive whole number, got -500"
 ```
 
 The report lists open breaks plus any trade whose latest message was rejected. T1004 matches on revision 1, but the client's revision 2 couldn't be read, so it stays on the list until a valid revision arrives. Use `--all` for every trade, or `--save-db primeops.sqlite` to keep the database.
 
 ## Input files
 
-`data/sample/executions.csv`, one row per trade:
+`data/sample/executions.csv`, one row per fill:
 
 ```
-trade_id,symbol,side,executed_quantity,received_at
-T1001,0700.HK,BUY,10000,2026-11-18T09:40:00+08:00
+trade_id,symbol,side,executed_quantity,received_at,fill_id,price
+T1001,0700.HK,BUY,10000,2026-11-18T09:40:00+08:00,F-1001-1,385.400
 ```
+
+`fill_id` and `price` are optional, so a file with only the first five columns still loads. If there is a `price` column, every row needs a price: a plain number above zero with at most 4 decimal places. If a row has no `fill_id`, it is its own fill. A feed that can resend a fill needs the ID, or the resend would count twice. All fills of a trade must have the same symbol and side.
 
 `data/sample/allocation_events.jsonl`, one message per line, each with the full split:
 
@@ -153,6 +198,7 @@ The sample has one trade per case:
 - **T1003:** stale revision 1 arriving after revision 2.
 - **T1004:** malformed revision 2.
 - **T1005:** executed but not yet allocated.
+- **T1006:** three fills with one resent, and an allocation that arrives before the last fill.
 
 Quantities follow each stock's Hong Kong board lot.
 
@@ -169,7 +215,8 @@ This is a local command-line tool. It reads two files and writes a CSV; it has n
 - **Input validation:**
   - every timestamp needs a UTC offset;
   - quantities are whole numbers from 1 to 10^12 (inside SQLite's 64-bit integers);
-  - duplicate trade IDs in the executions file stop the run;
+  - fills of one trade that disagree on symbol or side, or a fill ID reused with different content, stop the run;
+  - prices are plain decimals with at most 4 decimal places, and quantity times price is capped so SQLite's sums stay exact;
   - a malformed allocation message is rejected with a reason.
 - **Files:**
   - inputs are only read, never modified;
@@ -198,7 +245,8 @@ The tests cover:
 - the four scenario checks above;
 - each rule, including the exact boundary second and timezones;
 - input validation and the CLI;
-- agreement between the SQL and Python engines on the sample and on randomly generated messy input.
+- agreement between the SQL and Python engines on the sample and on randomly generated messy input;
+- property-based tests (hypothesis): shuffling the input order changes nothing, nothing received after the as-of time can change the answer, a resend changes nothing, splitting a fill in two changes neither quantity nor value, and the average price equals the exact fraction rounded half up.
 
 CI runs all of it on Python 3.10 to 3.13.
 
@@ -219,7 +267,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 
 ## Not covered
 
-Settlement (T+2 in Hong Kong), margin, stock borrow and custodian statement matching. This tells you the allocation matched, not that the trade settled.
+Settlement (T+2 in Hong Kong), margin, stock borrow and custodian statement matching. This tells you the allocation matched, not that the trade settled. Fees, commissions and the settlement amount aren't calculated, and cancelled or corrected fills aren't handled.
 
 ## License
 

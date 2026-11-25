@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0 (2026-11-25)
+
+### Added
+- Fills: a trade can now have several rows in `executions.csv`, one per fill. Executed quantity is the sum of the fills received by the as-of time, so a break can open and close while a block order is still filling
+- Average price for each trade, weighted by quantity and rounded half up to 4 decimals, in `show`, `summary`, `--json` and the CSV report (new `fills` and `average_price` columns). `--json` also gives the exact total value as `notional`
+- Optional `price` and `fill_id` columns in `executions.csv`. A resent fill counts once and gets a note; the same fill ID with different content stops the load. A file with the original five columns loads as before
+- Sample trade T1006: three fills with one resent, and an allocation that arrives before the last fill
+- Property-based tests with hypothesis: input order, nothing received after the as-of time, resends, splitting a fill, the exact average price, and the Python and SQL engines agreeing
+
+### Changed
+- Prices are held as whole units of 0.0001, so sums and averages are exact in Python and in SQLite
+- In `schema.sql` the `executions` table is now `trades` plus `fills`, and the as-of query filters resent fills and sums the rest. A database saved with `--save-db` by an earlier version has the old layout
+- Two rows with the same `trade_id` used to stop the load as a duplicate; they are now two fills of one trade
+- `Execution` holds a trade's fills; `Execution.single()` builds a trade filled in one piece
+- The summary table has Fills and Avg price columns, and `show` prints the fill count and price after the executed quantity
+
+### Security and input handling
+- A price must be a plain number above zero with at most 4 decimal places: no signs, exponents, `nan` or thousands separators
+- Quantity times price is capped for each fill and for each trade, so SQLite's sums can't overflow
+- Fills of one trade must have the same symbol and side
+- hypothesis pinned to 6.168.5, the newest release that supports Python 3.10
+
 ## 1.2.0 (2026-11-19)
 
 ### Changed

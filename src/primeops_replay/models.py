@@ -22,14 +22,57 @@ BREAKS = (Status.BREAK_SHORT, Status.BREAK_OVER)
 
 Split = tuple[tuple[str, int], ...]  # ((account, quantity), ...)
 
+# Prices are held as whole units of 0.0001, so sums and averages stay exact in Python and in SQLite.
+PRICE_SCALE = 10_000
+
+
+def round_average_e4(notional_e4: int, quantity: int) -> int:
+    """Total value divided by quantity, in units of 0.0001, rounded half up. Whole-number arithmetic only."""
+    return (2 * notional_e4 + quantity) // (2 * quantity)
+
+
+def format_e4(value_e4: int) -> str:
+    """4 decimal places, no float involved: 3854400 -> '385.4400'."""
+    whole, fraction = divmod(value_e4, PRICE_SCALE)
+    return f"{whole}.{fraction:04d}"
+
+
+@dataclass(frozen=True)
+class Fill:
+    """One execution report: part of a trade, filled at one price at one time."""
+
+    fill_id: str
+    quantity: int
+    received_at: datetime
+    price_e4: int | None = None  # None if the file has no price column
+    sequence: int = 0  # line number in the input file, breaks timestamp ties
+
+    @property
+    def notional_e4(self) -> int | None:
+        return None if self.price_e4 is None else self.quantity * self.price_e4
+
 
 @dataclass(frozen=True)
 class Execution:
+    """A trade as the broker filled it: one or more fills, all in the same symbol and side."""
+
     trade_id: str
     symbol: str
     side: str
-    executed_quantity: int
-    received_at: datetime
+    fills: tuple[Fill, ...]
+
+    @classmethod
+    def single(
+        cls,
+        trade_id: str,
+        symbol: str,
+        side: str,
+        quantity: int,
+        received_at: datetime,
+        price_e4: int | None = None,
+    ) -> Execution:
+        """A trade filled in one piece."""
+        return cls(trade_id, symbol, side, (Fill(f"{trade_id}-1", quantity, received_at, price_e4, 1),))
 
 
 @dataclass(frozen=True)
@@ -60,6 +103,8 @@ class ReconResult:
     message_id_used: str | None = None
     used_received_at: datetime | None = None  # when the instruction in force arrived
     notes: tuple[str, ...] = ()
+    fill_count: int = 0  # fills counted by as_of (a resent fill counts once)
+    notional_e4: int | None = None  # quantity x price summed over those fills; None without prices
 
     @property
     def difference(self) -> int | None:
@@ -67,6 +112,13 @@ class ReconResult:
         if self.executed_quantity is None or self.allocated_quantity is None:
             return None
         return self.executed_quantity - self.allocated_quantity
+
+    @property
+    def average_price_e4(self) -> int | None:
+        """Quantity-weighted average fill price in units of 0.0001, rounded half up."""
+        if self.notional_e4 is None or not self.executed_quantity:
+            return None
+        return round_average_e4(self.notional_e4, self.executed_quantity)
 
 
 def status_for(executed: int | None, allocated: int | None, *, trade_known: bool) -> Status:

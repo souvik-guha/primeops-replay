@@ -6,3 +6,4 @@
 {"message_id": "M-3001", "trade_id": "T1003", "revision": 1, "received_at": "2026-11-18T10:16:00+08:00", "allocations": [{"account": "ACC-B", "quantity": 5000}]}
 {"message_id": "M-4001", "trade_id": "T1004", "revision": 1, "received_at": "2026-11-18T10:25:00+08:00", "allocations": [{"account": "ACC-A", "quantity": 2000}]}
 {"message_id": "M-4002", "trade_id": "T1004", "revision": 2, "received_at": "2026-11-18T10:27:00+08:00", "allocations": [{"account": "ACC-A", "quantity": -500}]}
+{"message_id": "M-6001", "trade_id": "T1006", "revision": 1, "received_at": "2026-11-18T10:42:00+08:00", "allocations": [{"account": "ACC-A", "quantity": 2000}, {"account": "ACC-B", "quantity": 1000}]}
